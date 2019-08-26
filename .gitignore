@@ -1,0 +1,13 @@
+*
+!/**/
+!*.*
+!metal
+.vscode/
+ninja/
+obj/
+deps/
+*.exe
+*.bat
+*.ninja
+*~
+config/
