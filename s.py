@@ -4,6 +4,7 @@ import sys
 class MetalParser:
     def __init__(self):
         self.files_to_build = list()
+        self.found_libs = list()
         self.execs = list()
         self.opts = dict(c='-Wall -Wextra -Wformat-nonliteral -Wcast-align -Wpointer-arith -Wbad-function-cast -Wmissing-prototypes -Wmissing-declarations -Winline -Wundef -Wnested-externs -Wcast-qual -Wshadow -Wwrite-strings -Wfloat-equal -pedantic -std=c99'.split(' '),
                          cpp='-std=c++17 -pedantic -pedantic-errors -Wall -Wextra -g -ggdb -Wcast-align -Wcast-qual -Wctor-dtor-privacy -Wdisabled-optimization -Wformat=2 -Wmissing-declarations -Wmissing-include-dirs -Wold-style-cast -Woverloaded-virtual -Wredundant-decls -Wshadow -Wsign-conversion -Wsign-promo -Wstrict-overflow=5 -Wswitch-default -Wundef -Werror'.split(' '))
@@ -15,10 +16,16 @@ class MetalParser:
             return
         name = words[1].replace('.', os.path.split(os.getcwd())[1])
         selectors = words[2:words.index('using') if 'using' in words else None]
+        usings = words[words.index('using') + 1:] if 'using' in words else []
         files = self._select_files(selectors)
-        this = dict(name=name, files=[])
+        this = dict(name=name, files=[], libs=[])
+        for l in usings:
+            if l not in list(k['name'] for k in self.found_libs):
+                print(f'error: requested lib {l} not found')
+                return
+            this['libs'].append(list(k for k in self.found_libs if k['name'] == l)[0])
         for f in files:
-            o = dict(name=f, opt=self.opts.copy())
+            o = dict(name=f, opt=self.opts.copy(), libs=this['libs'])
             if o in self.files_to_build:
                 i = self.files_to_build.index(o)
                 o = self.files_to_build[i]
@@ -28,7 +35,7 @@ class MetalParser:
         self.execs.append(this)
     
     def parse(self, filename):
-        print(f'file {filename} being parsed')
+        # print(f'file {filename} being parsed')
         lines = self._read_sep_lines(filename)
         for line_number, line in enumerate(lines):
             words = self._sep_words(line)
@@ -89,7 +96,6 @@ class MetalParser:
         lang_rules = []
         for uh in self.files_to_build:
             filename = uh['name']
-            print(filename)
             if filename.endswith('.c') or filename.endswith('.cpp'):
                 local = filename
                 while local.startswith(f'..{slash}'):
@@ -119,9 +125,12 @@ class MetalParser:
                     ninja_rules += '  deps = gcc\n\n'
                     lang_rules.append('cpp')
                     pass
+                compiler_f = set()
+                if 'libs' in uh:
+                    for l in uh['libs']:
+                        compiler_f.add(l['compiler'])
                 ninja_builds += f'build {uh["objname"]}: compile_cpp {filename}\n'
-                ninja_builds += f'  cxx_flags = {" ".join(uh["opt"]["cpp"]).strip() + " "}\n'
-                pass
+                ninja_builds += f'  cxx_flags = {" ".join(uh["opt"]["cpp"]).strip() + " "}{" ".join(compiler_f)}\n'
             pass
         for uh in self.execs:
             uh['name'] += exe_ext
@@ -133,10 +142,16 @@ class MetalParser:
                 lang_rules.append('link')
                 pass
             ninja_builds += f'build {uh["name"]}: link_exe {" ".join(m["objname"] for m in uh["files"])}\n'
-            # if pack['linker_f'] != '':
-            #     ninja_builds += '  ld_flags = {0}\n'.format(pack['linker_f'])
-            # if pack['linker_libs'] != '':
-            #     ninja_builds += '  ld_libs = {0}\n'.format(pack['linker_libs'])
+            linker_f = set()
+            linker_libs = set()
+            if 'libs' in uh:
+                for l in uh['libs']:
+                    linker_f.add(l['linker'])
+                    linker_libs.add(l['libs'])
+            if linker_f:
+                ninja_builds += f'  ld_flags = {" ".join(linker_f)}\n'
+            if linker_libs:
+                ninja_builds += f'  ld_libs = {" ".join(linker_libs)}\n'
             pass
 
         ninja_file = 'builddir = ninja\n'
@@ -145,11 +160,140 @@ class MetalParser:
         with open('build.ninja', 'w') as out:
             out.write(ninja_file)
 
+    def parse_configlib(self, line_number, words):
+        if len(words) == 1:
+            print('syntax error at line', line_number)
+            print('not enough arguments')
+            return
+        elif len(words) > 2:
+            print('syntax error at line', line_number)
+            print('too many arguments')
+            return
+        lib = words[1]
+        if self.found_configs.get(lib, False) == False:
+            print('error at line', line_number)
+            print("couldn't find the wanted library")
+            return
+        c, lk, lb = self.parse_config(self.found_configs[lib])
+        klib = dict(name=lib, compiler=c, linker=lk, libs=lb)
+        self.found_libs.append(klib)
+        return
+        pass
+
+    def parse_disable(self, line_number, words):
+        if len(words) < 3:
+            print('syntax error at line', line_number)
+            print('not enough arguments')
+            return
+        if words[1] not in ['c', 'cpp']:
+            print('error at line', line_number)
+            print(words[1], 'is not c nor cpp')
+            return
+        language = words[1]
+        options = words[2:]
+        for op in options:
+            if op in self.opt[language]:
+                self.opt[language].remove(op)
+                pass
+            pass
+        pass
+    
+    def parse_lines(self, content):
+        idx = 0
+        # possible_tokens = ['info', 'path', 'compiler', 'linker', 'libs']
+        path = ''
+        compiler_flags = ''
+        linker_flags = ''
+        linker_libs = ''
+        if not content.endswith('\n'):
+            content = content + '\n'
+        # print(len(content), content)
+        while idx < len(content): # and content.startswith(possible_tokens, idx):
+            # print(idx, content[idx:idx+4], content.startswith('info', idx), path)
+            if content.startswith('info', idx):
+                while content[idx] != '"':
+                    idx += 1
+                idx += 1
+                while content[idx] != '"':
+                    idx += 1
+                while content[idx] != '\n':
+                    idx += 1
+                idx += 1
+            elif content.startswith('path', idx):
+                path = (content[idx:].split(None, 1))[1].split('\n', 1)[0]
+                while content[idx] != '\n':
+                    idx += 1
+                idx += 1
+            elif content.startswith('compiler', idx):
+                compiler_flags = (content[idx:].split(None, 1))[1].split('\n', 1)[0] + '  '
+                place = compiler_flags.find('$path$')
+                while place != -1:
+                    compiler_flags = compiler_flags[:place] + path + compiler_flags[place+6:]
+                    place = compiler_flags.find('$path$')
+
+                while content[idx] != '\n':
+                    idx += 1
+                idx += 1
+            elif content.startswith('linker', idx):
+                linker_flags = (content[idx:].split(None, 1))[1].split('\n', 1)[0] + '  '
+                place = linker_flags.find('$path$')
+                # print('linkerflags', linker_flags)
+                # print('place', place)
+                # print('path', path)
+                # linker_flags = linker_flags[:place] + path + linker_flags[place+6:]
+                # place = linker_flags.find('$path$')
+                # print('linkerflags', linker_flags)
+                # print('place', place)
+                while place != -1:
+                    linker_flags = linker_flags[:place] + path + linker_flags[place+6:]
+                    place = linker_flags.find('$path$')
+
+                while content[idx] != '\n':
+                    idx += 1
+                idx += 1
+            elif content.startswith('libs', idx):
+                linker_libs = (content[idx:].split(None, 1))[1].split('\n', 1)[0] + '  '
+                place = linker_libs.find('$path$')
+                while place != -1:
+                    linker_libs = linker_libs[:place] + path + linker_libs[place+6:]
+                    place = linker_libs.find('$path$')
+
+                while content[idx] != '\n':
+                    idx += 1
+                idx += 1
+            else:
+                idx += 1
+            pass
+        pass
+        compiler_flags = compiler_flags.strip()
+        linker_flags = linker_flags.strip()
+        linker_libs = linker_libs.strip()
+        return compiler_flags, linker_flags, linker_libs
+
+    def parse_config(self, file):
+        with open(file, "r") as config:
+            content = config.read()
+            flags = self.parse_lines(content)
+            return flags
+            pass
+        pass
+
+    def set_found_configs(self):
+        config_folder = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'config')
+        os.makedirs(config_folder, exist_ok=True)
+        files = {}
+        for fl in os.listdir(config_folder):
+            if fl.endswith('.cfg'):
+                files[fl[:-4]] = os.path.join(config_folder, fl)
+        self.found_configs = files.copy()
+        return
+
 if __name__ == '__main__':
     # executed as a script
     
     if os.path.isfile('metal'):
         parser = MetalParser()
+        parser.set_found_configs()
         parser.parse('metal')
     else:
         print('no metal file found')
