@@ -7,42 +7,13 @@ class MetalParser:
         self.execs = list()
         self.opts = dict(c='-Wall -Wextra -Wformat-nonliteral -Wcast-align -Wpointer-arith -Wbad-function-cast -Wmissing-prototypes -Wmissing-declarations -Winline -Wundef -Wnested-externs -Wcast-qual -Wshadow -Wwrite-strings -Wfloat-equal -pedantic -std=c99'.split(' '),
                          cpp='-std=c++17 -pedantic -pedantic-errors -Wall -Wextra -g -ggdb -Wcast-align -Wcast-qual -Wctor-dtor-privacy -Wdisabled-optimization -Wformat=2 -Wmissing-declarations -Wmissing-include-dirs -Wold-style-cast -Woverloaded-virtual -Wredundant-decls -Wshadow -Wsign-conversion -Wsign-promo -Wstrict-overflow=5 -Wswitch-default -Wundef -Werror'.split(' '))
-        self.defines = list()
-        self.defines.append(('.', os.path.split(os.getcwd())[1]))
-
-    def parse_def(self, line_number, words):
-        if len(words) < 2:
-            print('syntax error at line', line_number)
-            print('not enough arguments')
-            return
-        name = words[1]
-        words.append('')
-        self.defines.append((name, ' '.join(words[2:]).strip()))
-
-    def parse_undef(self, line_number, words):
-        if len(words) < 2:
-            print('syntax error at line', line_number)
-            print('not enough arguments')
-            return
-        deletes = []
-        for df in words[1:]:
-            for i, a in enumerate(self.defines):
-                if a[0] == df:
-                    deletes.append(i)
-        for i in deletes:
-            del self.defines[i]
 
     def parse_exec(self, line_number, words):
         if len(words) < 3:
             print('syntax error at line', line_number)
             print('not enough arguments')
             return
-        name = words[1]
-        print(self.defines)
-        for df in self.defines:
-            name = name.replace(*df)
-        print()
-        # name = words[1].replace('.', os.path.split(os.getcwd())[1])
+        name = words[1].replace('.', os.path.split(os.getcwd())[1])
         selectors = words[2:words.index('using') if 'using' in words else None]
         files = self._select_files(selectors)
         this = dict(name=name, files=[])
